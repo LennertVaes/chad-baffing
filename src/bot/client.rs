@@ -3228,6 +3228,7 @@ async fn command_processor(bot: Client, state: BotClientState) {
 /// configuration phase). Never panics, so it is safe on the buy path.
 fn slot_kind(bot: &Client, slot: usize) -> String {
     bot.menu()
+        .ok()
         .and_then(|menu| {
             menu.slots().get(slot).map(|s| {
                 if s.is_empty() {
