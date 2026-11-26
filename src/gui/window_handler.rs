@@ -125,20 +125,10 @@ impl WindowHandler {
 
     /// Remove Minecraft color codes from text
     /// Format: §x where x is a color code
+    /// Delegates to [`crate::utils::remove_minecraft_colors`].
+    #[inline]
     pub fn remove_minecraft_colors(text: &str) -> String {
-        let mut result = String::new();
-        let mut chars = text.chars();
-
-        while let Some(ch) = chars.next() {
-            if ch == '§' || ch == '┬' {
-                // Skip the next character (color code)
-                chars.next();
-            } else {
-                result.push(ch);
-            }
-        }
-
-        result
+        crate::utils::remove_minecraft_colors(text)
     }
 
     /// Wait for a specific item to appear in a slot
