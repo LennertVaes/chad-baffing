@@ -205,7 +205,7 @@ jobs:
             FrikadellenBAF-loader-windows-x86_64.exe
             ```
             
-            See [README_RUST.md](https://github.com/TreXito/frikadellen-baf-121/blob/main/README_RUST.md) for usage instructions.
+            See [README.md](https://github.com/LennertVaes/chad-baffing/blob/main/README.md) for usage instructions.
           files: |
             ./artifacts/**/*
           draft: false
