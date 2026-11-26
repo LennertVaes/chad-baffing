@@ -379,6 +379,7 @@ The `config.toml` file is created automatically on first run. You can edit it wi
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `command_delay_ms` | integer | `500` | Delay in ms between bot commands |
+| `max_buy_age_ms` | integer | `5000` | Skip an AH buy that has been buyable for longer than this when its turn comes. Grace-period flips count from `purchaseAt`. `0` disables |
 | `bed_spam_click_delay` | integer | `100` | Delay in ms between grace-period (bed) clicks when bedtiming is off |
 | `bed_pre_click_ms` | integer | `30` | How many ms before the COFL `purchaseAt` deadline to start clicking (used with bedtiming) |
 | `bedtiming` | boolean | `true` | Use COFL `purchaseAt` timing to pre-click grace-period (bed) auctions. Enabled by default. (Formerly `freemoney`.) |

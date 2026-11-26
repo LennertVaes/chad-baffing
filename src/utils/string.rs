@@ -42,18 +42,31 @@ pub fn format_number_with_separators(n: u64) -> String {
     result
 }
 
-/// Remove Minecraft color codes from text
-/// Format: §x where x is a color code
+/// Remove Minecraft formatting codes from text.
+///
+/// This is the ONE implementation; every other "strip colours" helper in the
+/// crate delegates here so the same item name or chat line always cleans to the
+/// same string, whichever code path handled it.
+///
+/// Strips `§` plus the following character, whatever it is: that covers colour
+/// and style codes in either case (`§a`, `§A`, `§l`, `§r`) as well as each pair
+/// of the `§x§R§R§G§G§B§B` hex form. Also strips the mojibake form `┬º` plus its
+/// code character, which is what `§` becomes when UTF-8 text is decoded as
+/// CP437 (seen in Windows console copies).
 pub fn remove_minecraft_colors(text: &str) -> String {
-    let mut result = String::new();
-    let mut chars = text.chars();
+    let mut result = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
 
     while let Some(ch) = chars.next() {
-        if ch == '§' || ch == '┬' {
-            // Skip the next character (color code)
-            chars.next();
-        } else {
-            result.push(ch);
+        match ch {
+            '§' => {
+                chars.next();
+            }
+            '┬' if chars.peek() == Some(&'º') => {
+                chars.next(); // 'º'
+                chars.next(); // the code character
+            }
+            _ => result.push(ch),
         }
     }
 
@@ -94,6 +107,20 @@ mod tests {
             remove_minecraft_colors("§6Buy Item Right Now"),
             "Buy Item Right Now"
         );
+    }
+
+    #[test]
+    fn remove_minecraft_colors_handles_every_form() {
+        // uppercase codes, which the old regex-based helpers missed
+        assert_eq!(remove_minecraft_colors("§AGreen§R Text"), "Green Text");
+        // hex colour sequence
+        assert_eq!(remove_minecraft_colors("§x§f§f§0§0§0§0Red"), "Red");
+        // CP437 mojibake of §
+        assert_eq!(remove_minecraft_colors("┬º6Gold"), "Gold");
+        // a lone ┬ (box drawing) is real text, not a code marker
+        assert_eq!(remove_minecraft_colors("a┬b"), "a┬b");
+        // trailing § does not panic
+        assert_eq!(remove_minecraft_colors("end§"), "end");
     }
 
     #[test]

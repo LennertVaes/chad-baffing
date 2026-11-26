@@ -2427,21 +2427,7 @@ async fn event_handler(bot: Client, event: Event, state: BotClientState) -> Resu
                                     );
                                     break;
                                 }
-                                let current_kind = {
-                                    let menu =
-                                        bot_clone.menu().expect("client inventory unavailable");
-                                    let slots = menu.slots();
-                                    slots
-                                        .get(31)
-                                        .map(|s| {
-                                            if s.is_empty() {
-                                                "air".to_string()
-                                            } else {
-                                                s.kind().to_string().to_lowercase()
-                                            }
-                                        })
-                                        .unwrap_or_else(|| "air".to_string())
-                                };
+                                let current_kind = slot_kind(&bot_clone, 31);
                                 if current_kind.contains("air") {
                                     info!("[AH] Grace period spam: window closed");
                                     *bot_state.write() = BotState::Idle;
@@ -3237,6 +3223,23 @@ async fn command_processor(bot: Client, state: BotClientState) {
     }
 }
 
+/// Lowercased item kind in `slot` of the open menu, or `"air"` when the slot is
+/// empty, out of range, or the client has no inventory right now (disconnect,
+/// configuration phase). Never panics, so it is safe on the buy path.
+fn slot_kind(bot: &Client, slot: usize) -> String {
+    bot.menu()
+        .and_then(|menu| {
+            menu.slots().get(slot).map(|s| {
+                if s.is_empty() {
+                    "air".to_string()
+                } else {
+                    s.kind().to_string().to_lowercase()
+                }
+            })
+        })
+        .unwrap_or_else(|| "air".to_string())
+}
+
 /// Execute a command from the command queue
 async fn execute_command(bot: &Client, command: &QueuedCommand, state: &BotClientState) {
     use crate::types::CommandType;
@@ -3395,18 +3398,10 @@ async fn execute_command(bot: &Client, command: &QueuedCommand, state: &BotClien
                         let mut kind;
                         loop {
                             let notified = fast_state.slot_data_notify.notified();
-                            let menu = fast_bot.menu().expect("client inventory unavailable");
-                            let slots = menu.slots();
-                            kind = slots
-                                .get(31)
-                                .map(|s| {
-                                    if s.is_empty() {
-                                        "air".to_string()
-                                    } else {
-                                        s.kind().to_string().to_lowercase()
-                                    }
-                                })
-                                .unwrap_or_else(|| "air".to_string());
+                            // No inventory (mid-disconnect / config phase) reads as
+                            // "air": the poll times out and the Event::Packet path
+                            // decides, instead of panicking this task.
+                            kind = slot_kind(&fast_bot, 31);
                             if kind != "air" || tokio::time::Instant::now() >= poll_deadline {
                                 break;
                             }

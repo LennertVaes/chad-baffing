@@ -246,15 +246,11 @@ pub fn spawn_periodic_log_cleanup() {
     });
 }
 
-/// Pre-compiled regex for stripping Minecraft §-color codes.  Compiled once on
-/// first use instead of on every call, avoiding ~1 ms of regex compilation overhead
-/// per invocation (significant during rapid chat/lore processing).
-static COLOR_CODE_RE: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"§[0-9a-fk-or]").unwrap());
-
-/// Remove Minecraft color codes from a string
+/// Remove Minecraft color codes from a string.
+/// Delegates to [`crate::utils::remove_minecraft_colors`].
+#[inline]
 pub fn remove_color_codes(text: &str) -> String {
-    COLOR_CODE_RE.replace_all(text, "").to_string()
+    crate::utils::remove_minecraft_colors(text)
 }
 
 /// Convert Minecraft color codes to ANSI color codes for terminal display

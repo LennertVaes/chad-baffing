@@ -114,6 +114,7 @@ pub const FBAF_DEFAULT_SETTINGS: &str = r#"{
     "bazaar_order_cancel_minutes_per_million": 1,
     "bazaar_tax_rate": 1.25,
     "auction_listing_delay_ms": 1500,
+    "max_buy_age_ms": 5000,
     "bedtiming": true,
     "skip": false,
     "use_cofl_chat": true,

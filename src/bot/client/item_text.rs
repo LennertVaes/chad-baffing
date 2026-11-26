@@ -5,18 +5,11 @@
 #[allow(unused_imports)]
 use super::*;
 
-/// Remove Minecraft §-prefixed color/format codes from a string
+/// Remove Minecraft §-prefixed color/format codes from a string.
+/// Delegates to [`crate::utils::remove_minecraft_colors`].
+#[inline]
 pub(super) fn remove_mc_colors(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '§' {
-            chars.next(); // skip the code character
-        } else {
-            result.push(c);
-        }
-    }
-    result
+    crate::utils::remove_minecraft_colors(s)
 }
 
 /// Get the display name of an item slot as a plain string (no color codes).

@@ -4587,6 +4587,7 @@ async fn main() -> Result<()> {
     let macro_paused_proc = macro_paused.clone();
     let command_delay_ms = config.command_delay_ms;
     let auction_listing_delay_ms = config.auction_listing_delay_ms;
+    let max_buy_age_ms = config.max_buy_age_ms;
     let chat_tx_proc = chat_tx.clone();
     let ws_client_proc = ws_client.clone();
     let bot_client_proc_inv = bot_client.clone();
@@ -4623,6 +4624,39 @@ async fn main() -> Result<()> {
             // Process commands from queue
             if let Some(cmd) = command_queue_processor.start_current() {
                 debug!("Processing command: {:?}", cmd.command_type);
+
+                // Don't spend a /viewauction round trip on a buy that can't
+                // succeed: one that waited behind a running command until it
+                // was almost certainly sniped, or one the purse can't cover.
+                // Skipping it frees the bot for the next (fresher) buy.
+                if let frikadellen_baf::types::CommandType::PurchaseAuction { flip } =
+                    &cmd.command_type
+                {
+                    let now_unix_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as i64)
+                        .unwrap_or(0);
+                    if let Some(reason) = frikadellen_baf::state::buy_skip_reason(
+                        &cmd,
+                        Instant::now(),
+                        now_unix_ms,
+                        max_buy_age_ms,
+                        bot_client_clone.get_purse(),
+                    ) {
+                        let why = match reason {
+                            frikadellen_baf::state::BuySkipReason::Stale { age_ms } => {
+                                format!("buyable for {} ms already", age_ms)
+                            }
+                            frikadellen_baf::state::BuySkipReason::Unaffordable {
+                                purse,
+                                price,
+                            } => format!("costs {} but purse is {}", price, purse),
+                        };
+                        info!("[Queue] Skipping buy of {} — {}", flip.item_name, why);
+                        command_queue_processor.complete_current();
+                        continue;
+                    }
+                }
 
                 // During startup, only allow startup-essential commands through.
                 // All other commands are deferred until startup completes to avoid
@@ -4896,10 +4930,21 @@ async fn main() -> Result<()> {
                     // Also wake the moment something is queued, so a Critical
                     // buy preempts an interruptible command without waiting
                     // out the rest of the 25 ms tick.
+                    //
+                    // Only skip the wait when the preemption check below will
+                    // actually fire. Skipping it whenever a buy is merely
+                    // queued turned this into a busy loop with no .await while
+                    // a non-interruptible command (e.g. the previous buy) ran:
+                    // a full core spun until it finished, and on a 1-vCPU VPS
+                    // that starved the bot task the buy was waiting on.
                     {
                         let woke = command_queue_processor.notified();
                         tokio::pin!(woke);
-                        if !command_queue_processor.critical_queued() {
+                        let will_preempt = cmd.interruptible
+                            && command_queue_processor
+                                .peek_queued()
+                                .is_some_and(|next| next.priority < cmd.priority);
+                        if !will_preempt {
                             tokio::select! {
                                 _ = sleep(Duration::from_millis(25)) => {}
                                 _ = &mut woke => {}
