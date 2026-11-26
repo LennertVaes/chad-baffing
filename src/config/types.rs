@@ -221,6 +221,13 @@ pub struct Config {
     #[serde(default = "default_auction_listing_delay_ms")]
     pub auction_listing_delay_ms: u64,
 
+    /// Skip an AH buy that has been buyable for longer than this when its turn
+    /// comes (it waited behind a running command and is almost certainly gone).
+    /// Measured from the later of "queued" and COFL's `purchaseAt`, so
+    /// grace-period flips are not affected. 0 disables. Default: 5000ms.
+    #[serde(default = "default_max_buy_age_ms")]
+    pub max_buy_age_ms: u64,
+
     // ═══════════════════════ Bazaar settings ═══════════════════════
     #[serde(default = "default_bazaar_order_check_interval_seconds")]
     pub bazaar_order_check_interval_seconds: u64,
@@ -597,6 +604,10 @@ fn default_auction_listing_delay_ms() -> u64 {
     1500
 }
 
+fn default_max_buy_age_ms() -> u64 {
+    5000
+}
+
 fn default_auction_duration_hours() -> u64 {
     24
 }
@@ -674,6 +685,7 @@ impl Default for Config {
             bed_spam_click_delay: default_bed_spam_click_delay(),
             bed_pre_click_ms: default_bed_pre_click_ms(),
             auction_listing_delay_ms: default_auction_listing_delay_ms(),
+            max_buy_age_ms: default_max_buy_age_ms(),
             // Bazaar settings
             bazaar_order_check_interval_seconds: default_bazaar_order_check_interval_seconds(),
             bazaar_order_cancel_minutes_per_million:

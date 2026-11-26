@@ -15,6 +15,66 @@ const COMMAND_TIMEOUT_MS: u64 = 30_000; // 30 seconds
 /// listings are always kept because they represent revenue opportunities.
 const MAX_QUEUE_SIZE: usize = 5;
 
+/// Expected profit of an AH buy (`target - starting_bid`), or `None` when the
+/// command is not a `PurchaseAuction`.
+fn buy_profit(command_type: &CommandType) -> Option<u64> {
+    match command_type {
+        CommandType::PurchaseAuction { flip } => {
+            Some(flip.target.saturating_sub(flip.starting_bid))
+        }
+        _ => None,
+    }
+}
+
+/// Why a queued AH buy should be skipped instead of attempted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuySkipReason {
+    /// The flip has been buyable for longer than the configured max age, so
+    /// it has almost certainly been sniped already.
+    Stale { age_ms: u64 },
+    /// The known purse is below the starting bid.
+    Unaffordable { purse: u64, price: u64 },
+}
+
+/// Decide whether a buy that is about to run is still worth attempting.
+///
+/// Age is measured from the later of "when it was queued" and "when COFL says
+/// it becomes buyable" (`purchase_at_ms`, the grace-period end), so a flip
+/// that is deliberately sent early for bed timing is not counted as stale
+/// while it waits for its grace period. `max_age_ms == 0` disables the age
+/// check; an unknown purse (`None`) disables the affordability check.
+pub fn buy_skip_reason(
+    cmd: &QueuedCommand,
+    now: Instant,
+    now_unix_ms: i64,
+    max_age_ms: u64,
+    purse: Option<u64>,
+) -> Option<BuySkipReason> {
+    let CommandType::PurchaseAuction { flip } = &cmd.command_type else {
+        return None;
+    };
+    if let Some(purse) = purse {
+        if flip.starting_bid > purse {
+            return Some(BuySkipReason::Unaffordable {
+                purse,
+                price: flip.starting_bid,
+            });
+        }
+    }
+    if max_age_ms > 0 {
+        let since_queued = now.saturating_duration_since(cmd.queued_at).as_millis() as u64;
+        let age_ms = match flip.purchase_at_ms {
+            // Not buyable yet, or buyable for less time than it has been queued.
+            Some(at) => since_queued.min(now_unix_ms.saturating_sub(at).max(0) as u64),
+            None => since_queued,
+        };
+        if age_ms > max_age_ms {
+            return Some(BuySkipReason::Stale { age_ms });
+        }
+    }
+    None
+}
+
 #[derive(Clone)]
 pub struct CommandQueue {
     queue: Arc<RwLock<VecDeque<QueuedCommand>>>,
@@ -82,13 +142,14 @@ impl CommandQueue {
         // Find insertion point based on priority. AH buys go ahead of every
         // other queued command, Critical ones included (manual panel actions,
         // listings, claims): a snipe is only worth anything in the first few
-        // hundred ms, while those can run a moment later. Buys stay in arrival
-        // order among themselves.
-        let is_buy = matches!(command_type, CommandType::PurchaseAuction { .. });
-        let pos = if is_buy {
+        // hundred ms, while those can run a moment later. Among themselves,
+        // buys are ordered by expected profit (highest first), arrival order
+        // breaking ties: when several are waiting behind a running buy, the
+        // next attempt should go to the one worth the most.
+        let pos = if let Some(profit) = buy_profit(&command_type) {
             queue
                 .iter()
-                .position(|c| !matches!(c.command_type, CommandType::PurchaseAuction { .. }))
+                .position(|c| buy_profit(&c.command_type).is_none_or(|p| p < profit))
                 .unwrap_or(queue.len())
         } else {
             queue
@@ -449,8 +510,99 @@ mod tests {
         ));
     }
 
+    fn buy_with(starting_bid: u64, target: u64, purchase_at_ms: Option<i64>) -> CommandType {
+        use crate::types::Flip;
+        CommandType::PurchaseAuction {
+            flip: Flip {
+                item_name: "Diamond".into(),
+                starting_bid,
+                target,
+                finder: Some("SNIPER".into()),
+                profit_perc: None,
+                purchase_at_ms,
+                uuid: Some("abc".into()),
+                list_at: None,
+            },
+        }
+    }
+
+    fn queued(command_type: CommandType, queued_at: Instant) -> QueuedCommand {
+        QueuedCommand {
+            id: Uuid::new_v4(),
+            priority: CommandPriority::Critical,
+            command_type,
+            queued_at,
+            interruptible: false,
+        }
+    }
+
     #[test]
-    fn buys_keep_arrival_order_among_themselves() {
+    fn buys_are_ordered_by_profit() {
+        let q = CommandQueue::new();
+        let small = q.enqueue(buy_with(900, 1_000, None), CommandPriority::Critical, false);
+        let big = q.enqueue(
+            buy_with(1_000, 5_000, None),
+            CommandPriority::Critical,
+            false,
+        );
+        let mid = q.enqueue(
+            buy_with(1_000, 2_000, None),
+            CommandPriority::Critical,
+            false,
+        );
+        q.enqueue(dummy_manage_orders(), CommandPriority::Critical, false);
+        for expected in [big, mid, small] {
+            assert_eq!(q.start_current().unwrap().id, expected);
+            q.complete_current();
+        }
+    }
+
+    #[test]
+    fn fresh_affordable_buy_is_kept() {
+        let now = Instant::now();
+        let cmd = queued(buy_with(800, 1_000, None), now);
+        assert_eq!(buy_skip_reason(&cmd, now, 0, 5_000, Some(10_000)), None);
+    }
+
+    #[test]
+    fn old_buy_is_stale() {
+        let now = Instant::now();
+        let cmd = queued(buy_with(800, 1_000, None), now - Duration::from_secs(10));
+        assert!(matches!(
+            buy_skip_reason(&cmd, now, 0, 5_000, None),
+            Some(BuySkipReason::Stale { .. })
+        ));
+        // 0 disables the age check
+        assert_eq!(buy_skip_reason(&cmd, now, 0, 0, None), None);
+    }
+
+    #[test]
+    fn grace_period_buy_is_not_stale_before_it_opens() {
+        let now = Instant::now();
+        let now_ms = 1_800_000_000_000;
+        // queued 10 s ago, but only buyable from 1 s from now
+        let cmd = queued(
+            buy_with(800, 1_000, Some(now_ms + 1_000)),
+            now - Duration::from_secs(10),
+        );
+        assert_eq!(buy_skip_reason(&cmd, now, now_ms, 5_000, None), None);
+    }
+
+    #[test]
+    fn unaffordable_buy_is_skipped() {
+        let now = Instant::now();
+        let cmd = queued(buy_with(800, 1_000, None), now);
+        assert_eq!(
+            buy_skip_reason(&cmd, now, 0, 5_000, Some(500)),
+            Some(BuySkipReason::Unaffordable {
+                purse: 500,
+                price: 800
+            })
+        );
+    }
+
+    #[test]
+    fn equal_profit_buys_keep_arrival_order() {
         let q = CommandQueue::new();
         let first = q.enqueue(dummy_purchase_auction(), CommandPriority::Critical, false);
         let second = q.enqueue(dummy_purchase_auction(), CommandPriority::Critical, false);
