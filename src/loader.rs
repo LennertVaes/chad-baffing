@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const GITHUB_REPO: &str = "TreXito/frikadellen-baf-121";
+const GITHUB_REPO: &str = "LennertVaes/chad-baffing";
 const GITHUB_API_BASE: &str = "https://api.github.com";
 
 /// The asset name for the main binary on the current platform.
